@@ -56,31 +56,7 @@ I'm building this to break into a cybersecurity role, so I optimized for **prova
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    subgraph WIN["🖥️ Windows 10 VM — 192.168.50.40"]
-        direction TB
-        ART["Atomic Red Team<br/>345 technique folders"]
-        SYS["Sysmon v15.22<br/>SwiftOnSecurity config<br/>+ custom T1490 rule"]
-        AGENT["Wazuh Agent"]
-        ARSC["Active Response scripts<br/>isolate.cmd / unisolate.cmd"]
-        ART --> SYS --> AGENT
-    end
-
-    subgraph UB["🐧 Ubuntu 22.04 VM — 192.168.50.50"]
-        direction TB
-        MGR["Wazuh Manager / Indexer / Dashboard"]
-        FWD["Python forwarder<br/>retry + fallback · AI triage<br/>masquerade rule · ticketing · dedup"]
-        DISC["Discord alerts"]
-        GRAF["Grafana dashboard"]
-        MGR --> FWD
-        FWD --> DISC
-        FWD --> GRAF
-    end
-
-    AGENT -- "Sysmon + FIM logs" --> MGR
-    FWD -- "Active Response command<br/>(least-privilege API user)" --> ARSC
-```
+   ![Architecture diagram](screenshots/architecture-diagram.png)
 
 Isolated VMware NAT network, firewall scoped to the Windows VM's IP only. No production systems, no external targets.
 
