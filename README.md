@@ -1,10 +1,31 @@
 # SOC Detection & Response Lab
 
+![Status](https://img.shields.io/badge/status-complete-brightgreen)
+![Python](https://img.shields.io/badge/python-3.x-blue)
+![Wazuh](https://img.shields.io/badge/SIEM-Wazuh-005571)
+![Sysmon](https://img.shields.io/badge/EDR-Sysmon%20v15.22-informational)
+![MITRE ATT&CK](https://img.shields.io/badge/framework-MITRE%20ATT%26CK-red)
+![Atomic Red Team](https://img.shields.io/badge/testing-Atomic%20Red%20Team-orange)
+
 A hands-on purple team project: simulate real MITRE ATT&CK techniques against a monitored Windows endpoint, measure whether [Wazuh](https://wazuh.com/) actually detects them, close the gaps with Sysmon and custom rules, and build an automated triage-to-response pipeline on top — AI-assisted analysis, Discord alerting, incident ticketing, a Grafana dashboard, and Wazuh Active Response-based host isolation.
 
 This is **Project 2**, built on top of a home SOC lab (Wazuh + NetAlertX + Grafana + a Gemini-based AI analyst) documented separately as Project 1.
 
 > **Lab disclaimer:** everything here runs on an isolated VMware NAT network with two VMs I own. All "attacks" are [Atomic Red Team](https://github.com/redcanaryco/atomic-red-team) test cases run against my own endpoint for detection-engineering purposes, not against any system I don't control.
+
+---
+
+## Quick facts
+
+| | |
+|---|---|
+| **Techniques simulated** | 5, via 345 available Atomic Red Team technique folders |
+| **Detection coverage** | 4 / 5 (1 gap left deliberately, and documented — not hidden) |
+| **Custom detection rules** | 1 (Sysmon registry rule for T1490) |
+| **Pipeline resilience fixes** | Bounded retry + graceful fallback, partial-line read fix |
+| **AI determinism fix** | Per-binary risk-score floors backstopping non-deterministic Gemini scoring |
+| **Response capability** | Wazuh Active Response host isolation — dry-run tested before live |
+| **Response safety model** | Least-privilege API credential, scoped to one agent, one action |
 
 ---
 
@@ -35,24 +56,60 @@ I'm building this to break into a cybersecurity role, so I optimized for **prova
 
 ## Architecture
 
-```
-┌─────────────────────────────┐         ┌──────────────────────────────────────┐
-│   Windows 10 VM (endpoint)   │         │   Ubuntu 22.04 VM                     │
-│   192.168.50.40               │         │   192.168.50.50                        │
-│                               │         │                                         │
-│   • Atomic Red Team           │  Wazuh  │   • Wazuh Manager / Indexer / Dashboard │
-│   • Sysmon v15.22             │  agent  │   • Custom Sysmon detection rule (T1490)│
-│     (SwiftOnSecurity config   │────────▶│   • Python/Gemini AI forwarder          │
-│      + custom T1490 rule)     │  logs   │       - retry + fallback logic          │
-│   • Wazuh agent                │         │       - masquerading rule + risk floors│
-│   • Active Response scripts    │◀────────│       - auto-ticketing + dedup          │
-│     (isolate.cmd / unisolate)  │  AR cmd │       - Discord alerting                │
-│                               │         │       - Wazuh Active Response trigger   │
-│                               │         │   • Grafana (open-incidents dashboard)  │
-└─────────────────────────────┘         └──────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph WIN["🖥️ Windows 10 VM — 192.168.50.40"]
+        direction TB
+        ART["Atomic Red Team<br/>345 technique folders"]
+        SYS["Sysmon v15.22<br/>SwiftOnSecurity config<br/>+ custom T1490 rule"]
+        AGENT["Wazuh Agent"]
+        ARSC["Active Response scripts<br/>isolate.cmd / unisolate.cmd"]
+        ART --> SYS --> AGENT
+    end
+
+    subgraph UB["🐧 Ubuntu 22.04 VM — 192.168.50.50"]
+        direction TB
+        MGR["Wazuh Manager / Indexer / Dashboard"]
+        FWD["Python forwarder<br/>retry + fallback · AI triage<br/>masquerade rule · ticketing · dedup"]
+        DISC["Discord alerts"]
+        GRAF["Grafana dashboard"]
+        MGR --> FWD
+        FWD --> DISC
+        FWD --> GRAF
+    end
+
+    AGENT -- "Sysmon + FIM logs" --> MGR
+    FWD -- "Active Response command<br/>(least-privilege API user)" --> ARSC
 ```
 
 Isolated VMware NAT network, firewall scoped to the Windows VM's IP only. No production systems, no external targets.
+
+### Alert triage & response decision flow
+
+The forwarder's core logic — how a raw alert becomes a scored, deduplicated, alerted, and (if Critical) contained incident:
+
+```mermaid
+flowchart TD
+    A["New alert in Wazuh alert log"] --> B{"Matches known<br/>system-binary name<br/>outside C:\Windows?"}
+    B -- No --> C["Send to Gemini for AI triage"]
+    B -- Yes --> D["Apply per-binary risk floor"]
+    C --> E{"Gemini call succeeds?"}
+    E -- Yes --> F["Use Gemini risk score"]
+    E -- "No — retry < 5" --> C
+    E -- "No — retry ≥ 5" --> G["Fallback score from Wazuh<br/>rule data (confidence: Unavailable)"]
+    D --> H["Final score = max(AI score, floor)"]
+    F --> H
+    G --> H
+    H --> I{"Severity High or Critical?"}
+    I -- No --> J["Log only"]
+    I -- Yes --> K["Create or dedup incident ticket"]
+    K --> L["Discord alert"]
+    K --> M{"Severity Critical?"}
+    M -- No --> N["No containment action"]
+    M -- Yes --> O{"Isolation mode"}
+    O -- dry-run --> P["Log 'would isolate'<br/>record decision in ticket"]
+    O -- live --> Q["Trigger Wazuh Active Response<br/>isolate.cmd on the agent"]
+```
 
 ---
 
