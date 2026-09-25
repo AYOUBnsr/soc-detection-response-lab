@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Release the isolated host: sudo unisolate [agent_id]   (default agent 001)"""
+import json, os, sys, urllib3
+from datetime import datetime, timezone
+from pathlib import Path
+import requests
+
+urllib3.disable_warnings()
+ENV = Path("/etc/wazuh-gemini-forwarder.env")
+TICKETS = Path("/var/lib/wazuh-gemini-forwarder/tickets")
+
+if os.geteuid() != 0:
+    sys.exit("Run with sudo")
+
+cfg = {}
+for line in ENV.read_text().splitlines():
+    if "=" in line and not line.lstrip().startswith("#"):
+        k, v = line.split("=", 1)
+        cfg[k.strip()] = v.strip().strip('"').strip("'")
+
+agent = sys.argv[1] if len(sys.argv) > 1 else "001"
+base = cfg.get("WAZUH_API_URL", "https://127.0.0.1:55000")
+
+r = requests.post(f"{base}/security/user/authenticate?raw=true",
+                  auth=(cfg["WAZUH_API_USER"], cfg["WAZUH_API_PASSWORD"]), verify=False, timeout=15)
+r.raise_for_status()
+token = r.text.strip()
+r = requests.put(f"{base}/active-response?agents_list={agent}",
+                 headers={"Authorization": f"Bearer {token}"},
+                 json={"command": "!unisolate.cmd", "arguments": [], "alert": {}},
+                 verify=False, timeout=15)
+r.raise_for_status()
+if r.json().get("data", {}).get("total_affected_items") != 1:
+    sys.exit(f"Release NOT delivered: {r.text}")
+print(f"Release command delivered to agent {agent}")
+
+now = datetime.now(timezone.utc).isoformat()
+for p in TICKETS.glob("INC-*.json"):
+    try:
+        t = json.loads(p.read_text())
+    except Exception:
+        continue
+    resp = t.get("response") or {}
+    if resp.get("action") == "isolate" and resp.get("outcome") == "isolated":
+        t["response"]["released_at"] = now
+        t["response"]["released_by"] = os.environ.get("SUDO_USER", "root")
+        st = p.stat()
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(t, indent=2, ensure_ascii=False))
+        os.chown(tmp, st.st_uid, st.st_gid); os.chmod(tmp, st.st_mode & 0o777)
+        os.replace(tmp, p)
+        print(f"Recorded release in {t['ticket_id']}")

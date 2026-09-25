@@ -1,0 +1,19 @@
+<!--
+  Custom Sysmon RegistryEvent rule added to close a detection gap for
+  T1490 - Inhibit System Recovery (Disable System Restore).
+
+  Sysmon's default (SwiftOnSecurity) config does not tag the specific
+  registry paths Windows uses to disable System Restore, so this technique
+  was invisible even with Sysmon running. This rule adds that coverage.
+
+  Insert inside the <RegistryEvent> <RuleGroup> include block of
+  sysmonconfig-export.xml. Original config was backed up first
+  (sysmonconfig-export.xml.before-t1490) before this was added.
+
+  After editing, reload with:
+    Sysmon64.exe -c sysmonconfig-export.xml
+-->
+
+<!--T1490: Inhibit System Recovery - added during purple team gap analysis-->
+<TargetObject name="T1490,DisableSystemRestore" condition="contains">SystemRestore\DisableSR</TargetObject>
+<TargetObject name="T1490,DisableSystemRestore" condition="contains">SystemRestore\DisableConfig</TargetObject>
